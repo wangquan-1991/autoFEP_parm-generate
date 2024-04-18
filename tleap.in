@@ -1,0 +1,24 @@
+source oldff/leaprc.ff14SB
+source leaprc.water.tip3p
+source leaprc.gaff2
+LIG=loadmol2 LIG.mol2 
+loadamberparams LIG.frcmod
+#POP=loadmol2 POP.mol2
+#loadamberparams POP.frcmod
+FNC = loadpdb complex.pdb
+check FNC
+FNP = loadpdb LIG.pdb
+saveamberparm FNC complex_nowater.prmtop complex_nowater.inpcrd
+check FNP
+saveamberparm FNP lig_nowater.prmtop lig_nowater.inpcrd #用于后续生成小分子itp文件
+solvateBox FNC TIP3PBOX 22.0 #控制水盒子大小，保整10W原子数
+solvateBox FNP TIP3PBOX 45.0
+addions FNC Na+ 0
+addions FNC Cl- 0
+addions FNP Na+ 0
+addions FNP Cl- 0
+saveamberparm FNC complex.prmtop complex.inpcrd
+savepdb FNC complex_MD.pdb
+saveamberparm FNP LIG.prmtop LIG.inpcrd
+savepdb FNP lig_MD.pdb
+quit
