@@ -1,0 +1,199 @@
+所需支持环境：
+1. AmberTools + GMX
+2. Parmed-建议pip3安装，防止出现路径问题
+3. Openbable#批处理 
+
+FEP计算目前需要以下文件：
+- 输入文件：complex.pdb（复合物pdb文件，去H） LIG.pdb（小分子文件，保留H），放入一个文件夹内
+- input文件
+- 使用方法：将input文件里面所有的文件与输入文件夹放入到一个文件夹内
+1. Bash parm.sh
+2. Bash wait.sh
+
+
+bash parm.sh &&
+bash wait.sh
+[图片]
+✳目前amber与GMX软件的输入输出可以较好的转换，本流程使用ambertools生成小分子参数并准备平衡输入文件，之后使用parmed转换为GMX格式，使用GMX进行20ps nvt+100ps npt进行优化
+✳单卡GPU串行
+力场选择
+目前推荐使用 amber的ff14SB+GAFF2力场，待ff19SB上线以后使用ff19SB+GAFF2，以达到最优精度
+
+相关文件生成：
+1. 前处理：
+为了后续批量自动化处理，所以蛋白以及配体最好统一命名：
+- 蛋白+小分子复合物体系（去H）：complex.pdb，小分子改名LIG，去除无关原子及connect
+- 小分子体系（加H）：LIG.pdb
+
+2. 配体小分子处理及输入文件生成
+1. parm.sh #生成小分子力场参数
+# 获取当前文件夹下的所有子文件夹
+subdirectories=$(find . -mindepth 1 -type d)
+
+# 设置最大并发任务数,只需要修改此处
+MAX_CONCURRENT_TASKS=24
+
+# 初始化计数器
+task_count=0
+
+# 遍历每个子文件夹
+for subdir in $subdirectories; do
+  # 拷贝脚本文件到子文件夹
+  cp *.sh *.mdp *.in *.py "$subdir"
+
+  # 进入子文件夹
+  cd "$subdir"
+
+  # 执行 bash run.sh 命令，并将任务放入后台
+  nohup bash run.sh &
+
+  # 增加任务计数器
+  ((task_count++))
+
+  # 当达到最大并发任务数时，等待所有任务完成
+  if [ "$task_count" -eq "$MAX_CONCURRENT_TASKS" ]; then
+    wait
+    # 重置任务计数器
+    task_count=0
+  fi
+
+  # 返回上一级目录
+  cd ..
+done
+
+# 等待剩余的任务完成
+wait
+2. run.sh: 按照小分子电荷修改 -nc参数
+#使用antechamber利用bcc方法生成小分子力场参数，如果确定小分子电荷，可在后面添加 -nc 电荷数
+#antechamber -fi pdb -fo mol2 -i LIG.pdb -o LIG.mol2 -c bcc -s 2 -nc 1 &&
+antechamber -fi pdb -fo mol2 -i LIG.pdb -o LIG.mol2 -c bcc -s 2 &&
+parmchk2 -i LIG.mol2 -f mol2 -o LIG.frcmod &&
+echo 1
+tleap -f tleap.in &&
+echo 2
+python3 AmbtoGMX.py &&
+obabel LIG.pdb -ipdb -omol -O LIG.mol&&
+echo quanbuwanchrngled
+mkdir complex 
+mkdir LIG
+mkdir lig_water
+mkdir lig_protein_water
+cp job_complex.sh *mdp complex.gro complex.top complex/ 
+#cd complex 
+#nohup bash job_complex.sh&
+#cd ..
+cp job_LIG.sh *mdp LIG.gro LIG.top LIG/
+#cd LIG
+#nohup bash job_LIG.sh&
+#cd ..
+3. tleap.in #生成复合物体系以及纯蛋白体系的拓扑及坐标参数
+      tleap -f tleap.in
+  #含有磷酸化残基的需source leaprc.phosaa14SB ，且关注对应残基名称与力场一致
+source oldff/leaprc.ff14SB #更新后可换成ff19SB
+source leaprc.phosaa14SB   #含有磷酸化残基的需source，且关注对应残基名称与力场一致
+#如CDK2的THR-160这个残基，需要改成TPO
+source leaprc.water.tip3p
+source leaprc.gaff2
+LIG=loadmol2 LIG.mol2 
+loadamberparams LIG.frcmod
+#POP=loadmol2 POP.mol2
+#loadamberparams POP.frcmod
+FNC = loadpdb complex.pdb
+check FNC
+FNP = loadpdb LIG.pdb
+#bond FNC.27.SG FNC.82.SG
+saveamberparm FNC complex_nowater.prmtop complex_nowater.inpcrd
+check FNP
+saveamberparm FNP lig_nowater.prmtop lig_nowater.inpcrd #用于后续生成小分子itp文件
+# solvate solute in water (TIP3P)
+# 22.0 is the minimal distance (in Angstroms) between the solute and the edge of the box
+solvateBox FNC TIP3PBOX 22.0 #控制水盒子大小，保证10W原子数
+solvateBox FNP TIP3PBOX 45.0 #控制水盒子大小，保证10W原子数
+addions FNC Na+ 0
+addions FNC Cl- 0
+addions FNP Na+ 0
+addions FNP Cl- 0
+saveamberparm FNC complex.prmtop complex.inpcrd
+savepdb FNC 1a06_MD.pdb
+saveamberparm FNP lig.prmtop lig.inpcrd
+savepdb FNP lig_MD.pdb
+quit
+3. GMX 运行模拟: 
+检查input里面的mdp参数
+wait.sh
+#!/bin/bash
+
+# 获取当前文件夹下的所有子文件夹
+subdirectories=$(find . -mindepth 1 -maxdepth 1 -type d)
+
+# 遍历每个子文件夹
+for subdir in $subdirectories; do
+  # 进入子文件夹的complex文件夹并运行指定的命令
+  cd "$subdir/complex/"
+  nohup bash job_complex.sh &
+  complex_pid=$!  # 获取 job_complex.sh 进程的 PID
+   # 等待 complex 进程完成
+  wait $complex_pid
+  cp complex.top ../lig_protein_water/SYS.itp
+  cp npt_100.gro ../lig_protein_water/SYS.gro
+  cd ../..
+
+  # 等待 complex 进程完成
+  
+  #cp "$subdir"/complex/
+
+  # 进入子文件夹的LIG文件夹并运行指定的命令
+  cd "$subdir/LIG/"
+  nohup bash job_LIG.sh &
+  lig_pid=$!  # 获取 job_LIG.sh 进程的 PID
+  # 等待 LIG 进程完成
+  wait $lig_pid
+  cp LIG.top ../lig_water/SYS.itp
+  cp npt_100.gro ../lig_water/SYS.gro
+  cd ../../
+
+  # 等待 LIG 进程完成
+  #wait $lig_pid
+done
+
+4. amber文件转换为GMX文件
+✳需要安装pamed:https://github.com/ParmEd/ParmEd
+AmbtoGMX.py，无需操作 shell脚本自动完成
+import parmed as pmd
+  
+# convert GROMACS topology to AMBER format
+#gmx_top = pmd.load_file('pmaawaterFE20mer2.top', xyz='pmaawaterFE20mer2.gro')
+#gmx_top.save('pmaa.top', format='amber')
+#gmx_top.save('pmaa.crd', format='rst7')
+
+# convert AMBER topology to GROMACS, CHARMM formats
+amber1 = pmd.load_file('cat_13a.parm7', 'prod1_complex.rst')
+# Save a GROMACS topology and GRO files
+amber1.save('cat_13a.top')
+amber1.save('cat_13a.gro')
+
+# 加载 Amber 格式的文件
+amber2 = pmd.load_file('LIG_36.parm7', 'prod1_lig.rst')
+
+# 保存为 Gromacs 格式的文件
+amber2.save('LIG_36.gro', overwrite=True)
+amber2.save('LIG_36.top', format='gromacs', overwrite=True)
+
+# 加载 Amber 格式的文件
+amber3 = pmd.load_file('LIG_36_nowat.parm7', 'LIG_36_nowat.inpcrd')
+
+# 保存为 Gromacs 格式的文件
+amber3.save('LIG_36_nowat.gro', overwrite=True)
+amber3.save('LIG_36_nowat.itp', format='gromacs', overwrite=True)                                                                   
+到此，所有文件生成完毕
+注意事项：
+- complex.pdb里面的蛋白建议去氢，防止tleap不识别某些H原子
+- LIG.pdb 不去H
+- tleap通过TER判断N/C端残基，因此链间必须有TER
+- 如果有CYS形成二硫键需要将形成二硫键的CYS残基名称改为CYX，否则tleap会报错，并且在tleap中使用bond指令，否则二硫键可能是断开的
+- 含有磷酸化残基的需source leaprc.phosaa14SB/19SB , 且关注对应残基名称与力场一致, 如CDK2的THR-160这个残基，需要改成TPO
+bond ramp.27.SG ramp.82.SG
+- 控制水盒子大小，保证10W原子
+- 生成index.ndx文件
+https://smartlogictech.feishu.cn/sync/RQYWdEEIasKyvWbvmZ2cgpGTnHf
+
