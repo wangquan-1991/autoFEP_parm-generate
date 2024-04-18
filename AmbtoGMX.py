@@ -11,7 +11,6 @@ amber1 = pmd.load_file('complex.prmtop', 'complex.inpcrd')
 amber1.save('complex.top')
 amber1.save('complex.gro')
 
-
 # 加载 Amber 格式的文件
 amber2 = pmd.load_file('LIG.prmtop', 'LIG.inpcrd')
 
