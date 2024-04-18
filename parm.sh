@@ -9,7 +9,7 @@ MAX_CONCURRENT_TASKS=24
 # 初始化计数器
 task_count=0
 
-# 遍历每个子文件夹
+# 遍历每个子文件夹 
 for subdir in $subdirectories; do
   # 拷贝脚本文件到子文件夹
   cp *.sh *.mdp *.in *.py "$subdir"
