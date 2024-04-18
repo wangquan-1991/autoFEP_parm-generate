@@ -195,5 +195,4 @@ amber3.save('LIG_36_nowat.itp', format='gromacs', overwrite=True)
 bond ramp.27.SG ramp.82.SG
 - 控制水盒子大小，保证10W原子
 - 生成index.ndx文件
-https://smartlogictech.feishu.cn/sync/RQYWdEEIasKyvWbvmZ2cgpGTnHf
 
